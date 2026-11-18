@@ -12,7 +12,7 @@
 
   <form class="card" id="b">
     <h2>Benchmark print</h2>
-    <label class="photo"><img alt="Benchmark negative, inverted" hidden><span>Tap to add a photo of the negative you printed</span><input type="file" accept="image/*"></label>
+    <label class="photo"><img alt="Benchmark negative, inverted" hidden><span>Tap to photograph the negative you printed</span><input type="file" accept="image/*" capture="environment"></label>
     <p class="note meta"></p>
     <div class="grid">
       <label class="f">Time (s)<input name="time" type="number" min="0" step="0.1" inputmode="decimal"></label>
@@ -27,7 +27,7 @@
 
   <form class="card" id="n">
     <h2>New negative</h2>
-    <label class="photo"><img alt="New negative, inverted" hidden><span>Tap to add a photo of the new negative (same phone and light)</span><input type="file" accept="image/*"></label>
+    <label class="photo"><img alt="New negative, inverted" hidden><span>Tap to photograph the new negative (same phone and light)</span><input type="file" accept="image/*" capture="environment"></label>
     <p class="note meta"></p>
     <div class="grid">
       <label class="f">Height (in)<input name="height" type="number" min="0" step="0.125" inputmode="decimal"></label>
