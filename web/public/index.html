@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Darkroom Exposure</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main>
+  <header class="top"><h1>Darkroom Exposure</h1><a href="/prints.html">Prints</a></header>
+
+  <form class="card" id="b">
+    <h2>Benchmark print</h2>
+    <label class="photo"><img alt="Benchmark negative, inverted" hidden><span>Tap to add a photo of the negative you printed</span><input type="file" accept="image/*"></label>
+    <p class="note meta"></p>
+    <div class="grid">
+      <label class="f">Time (s)<input name="time" type="number" min="0" step="0.1" inputmode="decimal"></label>
+      <label class="f">Height (in)<input name="height" type="number" min="0" step="0.125" inputmode="decimal"></label>
+      <label class="f">Aperture<select name="aperture"></select></label>
+      <label class="f">Filter<select name="grade"></select></label>
+    </div>
+    <label class="f wide">Preview brightness: match it to your print <output>±0</output><input name="brightness" type="range" min="-3" max="3" step="0.3333333" value="0"></label>
+    <p class="note" id="bStatus">Nothing saved yet.</p>
+    <button type="button" id="bDelete" hidden>Delete benchmark</button>
+  </form>
+
+  <form class="card" id="n">
+    <h2>New negative</h2>
+    <label class="photo"><img alt="New negative, inverted" hidden><span>Tap to add a photo of the new negative (same phone and light)</span><input type="file" accept="image/*"></label>
+    <p class="note meta"></p>
+    <div class="grid">
+      <label class="f">Height (in)<input name="height" type="number" min="0" step="0.125" inputmode="decimal"></label>
+      <label class="f">Aperture<select name="aperture"><option value="">Same</option></select></label>
+      <label class="f">Filter<select name="grade"></select></label>
+    </div>
+    <label class="f wide">Preview brightness <output>±0</output><input name="brightness" type="range" min="-3" max="3" step="0.3333333" value="0"></label>
+  </form>
+
+  <section class="card" aria-live="polite">
+    <div class="time" id="rTime">--</div>
+    <table id="rTable"></table>
+    <p class="note" id="rNote"></p>
+    <button type="button" id="savePrint" hidden>Save to prints</button>
+  </section>
+</main>
+
+<script src="common.js"></script>
+<script>
+const card = (id) => ({ form: $(id), img: $(id).querySelector('img'), analysis: null, file: null });
+const B = card('b'), N = card('n');
+fillSelects(B.form, 8);
+fillSelects(N.form, null);
+
+function look(c) {
+  const p = readPrint(c.form);
+  c.form.querySelector('output').value = signed(p.brightness, ' stops');
+  c.img.style.filter = lookFilter(p.brightness, p.grade);
+}
+
+function showPhoto(c, src, a) {
+  c.analysis = a;
+  c.img.src = src;
+  c.img.hidden = false;
+  c.form.querySelector('.photo span').hidden = true;
+  c.form.querySelector('.meta').textContent = exifLine(a);
+}
+
+function upload(c, path, method) {
+  c.form.querySelector('input[type=file]').onchange = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    const meta = c.form.querySelector('.meta');
+    meta.textContent = 'Reading photo…';
+    try {
+      const a = await api(path, { method, body: fd });
+      c.file = file;
+      showPhoto(c, c === B ? '/api/benchmark/image?' + Date.now() : URL.createObjectURL(file), a);
+      if (c === B) saved();
+      compute();
+    } catch (err) { meta.textContent = err.message; }
+  };
+}
+upload(B, '/benchmark/image', 'PUT');
+upload(N, '/analyze', 'POST');
+
+const bStatus = (t) => { $('bStatus').textContent = t; };
+const saved = () => { bStatus('Saved ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + '.'); $('bDelete').hidden = false; };
+
+let saveTimer = 0;
+B.form.oninput = (e) => {
+  if (e.target.type === 'file') return;
+  look(B);
+  N.form.height.placeholder = B.form.height.value;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    const p = readPrint(B.form);
+    p.aperture ??= 8;
+    try { await api('/benchmark/print', { method: 'PUT', json: p }); saved(); compute(); }
+    catch (err) { bStatus('Not saved: ' + err.message); }
+  }, 400);
+};
+N.form.oninput = (e) => { if (e.target.type !== 'file') { look(N); compute(); } };
+
+$('bDelete').onclick = async () => {
+  if (!confirm('Delete the saved benchmark?')) return;
+  try { await api('/benchmark', { method: 'DELETE' }); } catch (err) { bStatus(err.message); return; }
+  B.form.reset();
+  B.analysis = null;
+  B.img.hidden = true;
+  B.form.querySelector('.photo span').hidden = false;
+  B.form.querySelector('.meta').textContent = '';
+  N.form.height.placeholder = '';
+  $('bDelete').hidden = true;
+  bStatus('Benchmark deleted.');
+  look(B);
+  compute();
+};
+
+let seq = 0, lastPrint = null;
+async function compute() {
+  const my = ++seq, bp = readPrint(B.form), np = readPrint(N.form);
+  lastPrint = null;
+  $('savePrint').hidden = true;
+  np.height ??= bp.height; // blank new fields follow the benchmark
+  np.aperture ??= bp.aperture;
+  const missing = !B.analysis ? 'Add a benchmark negative.' : !bp.time ? 'Enter the benchmark time.' : !bp.height ? 'Enter the benchmark height.'
+    : !N.analysis ? 'Add a new negative to get a time.' : !np.height ? 'Enter the new print height.' : null;
+  const show = (t, rows, note) => {
+    $('rTime').textContent = t;
+    $('rTable').replaceChildren(...rows.map((r) => { const tr = document.createElement('tr'); r.forEach((x) => tr.insertCell().textContent = x); return tr; }));
+    $('rNote').textContent = note;
+  };
+  if (missing) return show('--', [], missing);
+  try {
+    const r = await api('/exposure', { method: 'POST', json: { analysis: N.analysis, print: np } });
+    if (my !== seq) return;
+    const s = r.stops;
+    lastPrint = { ...np, time: Math.round(r.seconds * 10) / 10 };
+    $('savePrint').hidden = false;
+    $('savePrint').textContent = 'Save to prints';
+    show(fmtTime(r.seconds) + ` at f/${np.aperture}`, [
+      ['Benchmark', fmtTime(bp.time) + ` at f/${bp.aperture}`],
+      ['Negative density', signed(s.density, ' stops')],
+      ['Preview brightness', signed(s.brightness, ' stops')],
+      ['Filter', signed(s.filter, ' stops')],
+      ['Height', signed(s.height, ' stops')],
+      ['Aperture', signed(s.aperture, ' stops')],
+    ], r.exif_matched ? '' : 'One photo has no exposure data, so density assumes identical phone settings.');
+  } catch (err) { if (my === seq) show('--', [], err.message); }
+}
+
+$('savePrint').onclick = async () => {
+  if (!lastPrint || !N.file) return;
+  const btn = $('savePrint'), fd = new FormData();
+  fd.append('file', N.file);
+  fd.append('data', JSON.stringify(lastPrint));
+  btn.disabled = true;
+  try { await api('/prints', { method: 'POST', body: fd }); btn.textContent = 'Saved ✓'; }
+  catch (err) { $('rNote').textContent = 'Not saved: ' + err.message; }
+  btn.disabled = false;
+};
+
+api('/benchmark').then((rec) => {
+  for (const [k, v] of Object.entries(rec.print)) if (B.form[k] && v != null) B.form[k].value = v;
+  N.form.height.placeholder = B.form.height.value;
+  if (rec.analysis) { showPhoto(B, '/api/benchmark/image?' + Date.now(), rec.analysis); bStatus('Saved on the server.'); $('bDelete').hidden = false; }
+}).catch((err) => bStatus(err.message)).finally(() => { look(B); look(N); compute(); });
+</script>
+</body>
+</html>
