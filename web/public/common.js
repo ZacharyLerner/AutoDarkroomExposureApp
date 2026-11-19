@@ -34,6 +34,16 @@ function loadNegative(src) {
   });
 }
 
+// Tap twice to delete. Used instead of confirm(), which some iPhone browsers skip silently (counts as Cancel).
+function armed(btn) {
+  if (btn.dataset.armed) return true;
+  const label = btn.textContent;
+  btn.dataset.armed = 1;
+  btn.textContent = 'Tap again to delete';
+  setTimeout(() => { delete btn.dataset.armed; btn.textContent = label; }, 3000);
+  return false;
+}
+
 // Stops of negative that span paper white to black: Ilford-style ISO R ≈ 160 at grade 0 down to 50 at grade 5.
 const paperStops = (grade) => (160 - 22 * grade) / 100 / Math.log10(2);
 

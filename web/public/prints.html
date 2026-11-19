@@ -75,7 +75,7 @@ function render(rec) {
     }, 400);
   };
   q('.del').onclick = async () => {
-    if (!confirm('Delete this print?')) return;
+    if (!armed(q('.del'))) return;
     try { await api(`/prints/${rec.id}`, { method: 'DELETE' }); form.remove(); }
     catch (err) { q('.saved').textContent = err.message; }
   };

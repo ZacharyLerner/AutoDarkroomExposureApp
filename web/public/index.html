@@ -142,7 +142,7 @@ N.form.oninput = (e) => {
 };
 
 $('bDelete').onclick = async () => {
-  if (!confirm('Delete the saved benchmark?')) return;
+  if (!armed($('bDelete'))) return;
   try { await api('/benchmark', { method: 'DELETE' }); } catch (err) { bStatus(err.message); return; }
   B.form.reset();
   B.analysis = null;
