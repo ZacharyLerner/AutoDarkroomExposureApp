@@ -106,3 +106,19 @@ r = c.post("/api/analyze", files={"file": ("b.jpg", buf3.getvalue(), "image/jpeg
 assert r["iso"] == 100 and abs(r["ev"] - 9.18) < 0.01, r
 assert c.post("/api/analyze", files={"file": ("b.jpg", buf3.getvalue(), "image/jpeg")}, data={"iso": "-5"}).status_code == 422
 print("camera ok")
+
+# Originals are turned upright (EXIF orientation) before measuring, keeping their phone settings.
+side = Image.new("L", (60, 40), 255)
+ImageDraw.Draw(side).rectangle((0, 0, 29, 39), fill=10)  # dark left half
+ex = Image.Exif()
+ex[0x0112] = 6  # stored sideways: display = rotate 90° clockwise, so the dark half ends up on top
+ex.get_ifd(0x8769).update({33437: 2.2, 33434: 0.01, 34855: 100})
+buf4 = BytesIO()
+side.convert("RGB").save(buf4, "JPEG", quality=95, exif=ex.tobytes())
+r = c.post("/api/analyze", files={"file": ("s.jpg", buf4.getvalue(), "image/jpeg")}, data={"pan_y": "-1", "rotation": "1", "keep": "true"}).json()
+assert r["iso"] == 100, r
+top = r["log_mean"]
+r = c.post("/api/analyze", files={"file": ("s.jpg", buf4.getvalue(), "image/jpeg")}, data={"pan_y": "1", "rotation": "1"}).json()
+assert top < r["log_mean"] - 3, (top, r)
+assert Image.open(BytesIO(c.get("/api/negative/image").content)).size == (40, 60)
+print("upright ok")

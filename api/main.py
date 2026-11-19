@@ -21,7 +21,8 @@ PRINTS = DATA / "prints"
 SETTINGS = DATA / "settings.json"
 PRINTS.mkdir(exist_ok=True)
 PrintId = Annotated[str, PathParam(pattern=r"^[0-9a-f]{32}$")]  # also blocks path traversal
-MAX_UPLOAD = 20_000_000  # the browser uploads a ~1600px JPEG; this only stops abuse
+NEGATIVE = DATA / "negative.jpg"  # small copy of the new negative being worked on (one slot)
+MAX_UPLOAD = 150_000_000  # originals go up whole: Safari applies the HDR gain map when decoding, which skews tones
 
 # sRGB 0-255 -> linear light
 LIN = [(v / 12.92) if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in (i / 255 for i in range(256))]
@@ -172,7 +173,7 @@ async def read_upload(file: UploadFile) -> Image.Image:
     raw = await file.read(MAX_UPLOAD + 1)
     if len(raw) > MAX_UPLOAD:
         raise HTTPException(413, "Photo is too large.")
-    return open_image(raw)
+    return ImageOps.exif_transpose(open_image(raw))  # upright, so the crop box is measured the way it's shown
 
 
 app = FastAPI(title="Darkroom Exposure API")
@@ -185,9 +186,21 @@ async def post_analyze(
     pan_y: float = Form(0, ge=-1, le=1),
     rotation: int = Form(0, ge=0, le=3),
     portrait: bool = Form(False),
+    keep: bool = Form(False),  # store a small copy as the new negative
     cam: dict = Depends(camera),
 ) -> Analysis:
-    return analyze(await read_upload(file), load_settings().autocrop, pan_x, pan_y, box_aspect(rotation, portrait), cam)
+    im = await read_upload(file)
+    a = analyze(im, load_settings().autocrop, pan_x, pan_y, box_aspect(rotation, portrait), cam)
+    if keep:
+        save_jpeg(im, NEGATIVE)
+    return a
+
+
+@app.get("/api/negative/image")
+def get_negative_image():
+    if not NEGATIVE.exists():
+        raise HTTPException(404, "No negative.")
+    return FileResponse(NEGATIVE, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/benchmark")

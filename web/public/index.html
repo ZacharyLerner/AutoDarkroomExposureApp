@@ -57,7 +57,7 @@ for (const c of [B, N]) { onRotate(c.form, c.form.querySelector('.rot')); onBox(
 enablePan(B.img, B.form, () => look(B), () => B.form.dispatchEvent(new Event('input'))); // saving re-measures on the server
 enablePan(N.img, N.form, () => look(N), () => measureN());
 
-// Small photo + the phone settings read from the original + crop placement.
+// Photo + its phone settings (the server's small copy has no EXIF) + crop placement.
 function photoForm(c) {
   const fd = new FormData();
   fd.append('file', c.file, 'photo.jpg');
@@ -101,11 +101,15 @@ function upload(c, path, method) {
     const meta = c.form.querySelector('.meta');
     meta.textContent = 'Reading photo…';
     try {
-      const small = await shrink(file), prev = [c.file, c.exif];
-      [c.file, c.exif] = [small.blob, small.exif];
-      let a;
-      try { a = await api(path, { method, body: photoForm(c) }); } catch (err) { [c.file, c.exif] = prev; throw err; }
-      showPhoto(c, c === B ? '/api/benchmark/image?' + Date.now() : URL.createObjectURL(c.file), a);
+      const fd = photoForm({ ...c, file, exif: {} }); // the original: Safari would skew tones decoding it here
+      if (c === N) fd.append('keep', true);
+      const a = await api(path, { method, body: fd });
+      if (c === N) { // work from the server's small copy from now on
+        const r = await fetch('/api/negative/image?' + Date.now());
+        if (!r.ok) throw new Error('Could not load the negative.');
+        [N.file, N.exif] = [await r.blob(), { aperture: a.aperture, shutter: a.shutter, iso: a.iso }];
+      }
+      showPhoto(c, c === B ? '/api/benchmark/image?' + Date.now() : URL.createObjectURL(N.file), a);
       if (c === B) saved();
       compute();
     } catch (err) { meta.textContent = err.message; }
