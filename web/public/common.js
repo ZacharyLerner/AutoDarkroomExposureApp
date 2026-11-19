@@ -34,6 +34,38 @@ function loadNegative(src) {
   });
 }
 
+// Phone settings from a JPEG's EXIF ({} if absent or not a JPEG). Only these three are needed.
+async function readExif(file) {
+  try {
+    const v = new DataView(await file.slice(0, 1 << 18).arrayBuffer());
+    if (v.getUint16(0) !== 0xFFD8) return {};
+    for (let p = 2; v.getUint16(p) !== 0xFFDA; p += 2 + v.getUint16(p + 2)) { // walk markers until image data
+      if (v.getUint16(p) !== 0xFFE1 || v.getUint32(p + 4) !== 0x45786966) continue; // APP1 "Exif"
+      const t = p + 10, le = v.getUint16(t) === 0x4949;
+      const u16 = (o) => v.getUint16(t + o, le), u32 = (o) => v.getUint32(t + o, le);
+      const tags = (ifd) => { const m = {}; for (let i = 0; i < u16(ifd); i++) m[u16(ifd + 2 + 12 * i)] = ifd + 2 + 12 * i; return m; };
+      const sub = tags(u32(4))[0x8769];
+      if (!sub) return {};
+      const x = tags(u32(sub + 8));
+      const rat = (e) => e && u32(u32(e + 8) + 4) ? u32(u32(e + 8)) / u32(u32(e + 8) + 4) : null;
+      return { aperture: rat(x[0x829D]), shutter: rat(x[0x829A]), iso: x[0x8827] ? u16(x[0x8827] + 8) : null };
+    }
+  } catch { /* truncated or odd file: no settings */ }
+  return {};
+}
+
+// Upright ~1600px JPEG for upload and storage; the full-size photo never leaves the phone.
+async function shrink(file) {
+  const exif = await readExif(file);
+  let bmp;
+  try { bmp = await createImageBitmap(file); } catch { throw new Error("That file couldn't be opened as an image."); }
+  const s = Math.min(1, 1600 / Math.max(bmp.width, bmp.height)), cv = document.createElement('canvas');
+  cv.width = Math.round(bmp.width * s); cv.height = Math.round(bmp.height * s);
+  cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
+  bmp.close();
+  return { blob: await new Promise((r) => cv.toBlob(r, 'image/jpeg', 0.9)), exif };
+}
+
 // Stops of negative that span paper white to black: Ilford-style ISO R ≈ 160 at grade 0 down to 50 at grade 5.
 const paperStops = (grade) => (160 - 22 * grade) / 100 / Math.log10(2);
 

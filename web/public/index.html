@@ -49,7 +49,7 @@
 
 <script src="common.js"></script>
 <script>
-const card = (id) => ({ form: $(id), img: $(id).querySelector('canvas'), analysis: null, file: null, neg: null });
+const card = (id) => ({ form: $(id), img: $(id).querySelector('canvas'), analysis: null, file: null, exif: {}, neg: null });
 const B = card('b'), N = card('n');
 fillSelects(B.form, 8);
 fillSelects(N.form, null);
@@ -57,16 +57,20 @@ for (const c of [B, N]) { onRotate(c.form, c.form.querySelector('.rot')); onBox(
 enablePan(B.img, B.form, () => look(B), () => B.form.dispatchEvent(new Event('input'))); // saving re-measures on the server
 enablePan(N.img, N.form, () => look(N), () => measureN());
 
+// Small photo + the phone settings read from the original + crop placement.
+function photoForm(c) {
+  const fd = new FormData();
+  fd.append('file', c.file, 'photo.jpg');
+  for (const [k, v] of Object.entries(c.exif)) if (v) fd.append(k, v);
+  for (const k of ['pan_x', 'pan_y', 'rotation']) fd.append(k, c.form[k].value);
+  fd.append('portrait', c.form.portrait.value === '1');
+  return fd;
+}
+
 // The new negative lives only in this page, so re-send it to measure the moved crop window.
 async function measureN() {
   if (!N.file) return;
-  const fd = new FormData();
-  fd.append('file', N.file);
-  fd.append('pan_x', N.form.pan_x.value);
-  fd.append('pan_y', N.form.pan_y.value);
-  fd.append('rotation', N.form.rotation.value);
-  fd.append('portrait', N.form.portrait.value === '1');
-  try { N.analysis = await api('/analyze', { method: 'POST', body: fd }); look(N); compute(); }
+  try { N.analysis = await api('/analyze', { method: 'POST', body: photoForm(N) }); look(N); compute(); }
   catch (err) { N.form.querySelector('.meta').textContent = err.message; }
 }
 
@@ -94,18 +98,14 @@ function upload(c, path, method) {
     const file = e.target.files[0];
     e.target.value = '';
     if (!file) return;
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('pan_x', c.form.pan_x.value);
-    fd.append('pan_y', c.form.pan_y.value);
-    fd.append('rotation', c.form.rotation.value);
-    fd.append('portrait', c.form.portrait.value === '1');
     const meta = c.form.querySelector('.meta');
     meta.textContent = 'Reading photo…';
     try {
-      const a = await api(path, { method, body: fd });
-      c.file = file;
-      showPhoto(c, c === B ? '/api/benchmark/image?' + Date.now() : URL.createObjectURL(file), a);
+      const small = await shrink(file), prev = [c.file, c.exif];
+      [c.file, c.exif] = [small.blob, small.exif];
+      let a;
+      try { a = await api(path, { method, body: photoForm(c) }); } catch (err) { [c.file, c.exif] = prev; throw err; }
+      showPhoto(c, c === B ? '/api/benchmark/image?' + Date.now() : URL.createObjectURL(c.file), a);
       if (c === B) saved();
       compute();
     } catch (err) { meta.textContent = err.message; }
@@ -191,8 +191,7 @@ async function compute() {
 
 $('savePrint').onclick = async () => {
   if (!lastPrint || !N.file) return;
-  const btn = $('savePrint'), fd = new FormData();
-  fd.append('file', N.file);
+  const btn = $('savePrint'), fd = photoForm(N);
   fd.append('data', JSON.stringify(lastPrint));
   btn.disabled = true;
   try { await api('/prints', { method: 'POST', body: fd }); btn.textContent = 'Saved ✓'; }

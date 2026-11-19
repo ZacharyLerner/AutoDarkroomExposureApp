@@ -100,3 +100,9 @@ assert density(sq, 0, -1, 0, 2 / 3) == density(sq, 0, 1, 0, 2 / 3)  # upright bo
 r = c.post("/api/analyze", files={"file": ("b.jpg", buf3.getvalue(), "image/jpeg")}, data={"rotation": "1", "portrait": "true"})
 assert r.status_code == 200, r.text
 print("box ok")
+
+# Shrunk uploads carry no EXIF: the browser sends the phone settings as form fields instead.
+r = c.post("/api/analyze", files={"file": ("b.jpg", buf3.getvalue(), "image/jpeg")}, data={"aperture": "2.2", "shutter": "0.008333", "iso": "100"}).json()
+assert r["iso"] == 100 and abs(r["ev"] - 9.18) < 0.01, r
+assert c.post("/api/analyze", files={"file": ("b.jpg", buf3.getvalue(), "image/jpeg")}, data={"iso": "-5"}).status_code == 422
+print("camera ok")

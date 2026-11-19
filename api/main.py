@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import FastAPI, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, Form, HTTPException, UploadFile
 from fastapi import Path as PathParam
 from fastapi.responses import FileResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -21,7 +21,7 @@ PRINTS = DATA / "prints"
 SETTINGS = DATA / "settings.json"
 PRINTS.mkdir(exist_ok=True)
 PrintId = Annotated[str, PathParam(pattern=r"^[0-9a-f]{32}$")]  # also blocks path traversal
-MAX_UPLOAD = 150_000_000  # full-res phone photos (48 MP, ProRAW-sized) run well past 40 MB
+MAX_UPLOAD = 20_000_000  # the browser uploads a ~1600px JPEG; this only stops abuse
 
 # sRGB 0-255 -> linear light
 LIN = [(v / 12.92) if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in (i / 255 for i in range(256))]
@@ -98,8 +98,17 @@ def density(im: Image.Image, crop: float, pan_x: float = 0, pan_y: float = 0, as
     return math.log2(max(mean, 1e-4))
 
 
-def analyze(im: Image.Image, crop: float, pan_x: float = 0, pan_y: float = 0, aspect: float | None = None) -> Analysis:
-    ex = im.getexif().get_ifd(0x8769)  # Exif sub-IFD
+def camera(
+    aperture: float | None = Form(None, gt=0, le=100),
+    shutter: float | None = Form(None, gt=0, le=3600),
+    iso: float | None = Form(None, gt=0, le=1_000_000),
+) -> dict:
+    """Phone settings the browser read from the original photo before shrinking it (which drops EXIF)."""
+    return {33437: aperture, 33434: shutter, 34855: iso}
+
+
+def analyze(im: Image.Image, crop: float, pan_x: float = 0, pan_y: float = 0, aspect: float | None = None, cam: dict | None = None) -> Analysis:
+    ex = {**(cam or {}), **im.getexif().get_ifd(0x8769)}  # the image's own EXIF wins when present
     iso = ex.get(34855)
     if isinstance(iso, (tuple, list)):
         iso = iso[0] if iso else None
@@ -176,8 +185,9 @@ async def post_analyze(
     pan_y: float = Form(0, ge=-1, le=1),
     rotation: int = Form(0, ge=0, le=3),
     portrait: bool = Form(False),
+    cam: dict = Depends(camera),
 ) -> Analysis:
-    return analyze(await read_upload(file), load_settings().autocrop, pan_x, pan_y, box_aspect(rotation, portrait))
+    return analyze(await read_upload(file), load_settings().autocrop, pan_x, pan_y, box_aspect(rotation, portrait), cam)
 
 
 @app.get("/api/benchmark")
@@ -186,11 +196,11 @@ def get_benchmark() -> dict:
 
 
 @app.put("/api/benchmark/image")
-async def put_benchmark_image(file: UploadFile) -> Analysis:
+async def put_benchmark_image(file: UploadFile, cam: dict = Depends(camera)) -> Analysis:
     im = await read_upload(file)
     rec = load()
     p = BenchPrint(**rec["print"])
-    a = analyze(im, load_settings().autocrop, p.pan_x, p.pan_y, box_aspect(p.rotation, p.portrait))
+    a = analyze(im, load_settings().autocrop, p.pan_x, p.pan_y, box_aspect(p.rotation, p.portrait), cam)
     save_jpeg(im, IMAGE)
     rec["analysis"] = a.model_dump()
     save(rec)
@@ -243,14 +253,14 @@ def list_prints() -> list[dict]:
 
 
 @app.post("/api/prints", status_code=201)
-async def create_print(file: UploadFile, data: str = Form()) -> dict:
+async def create_print(file: UploadFile, data: str = Form(), cam: dict = Depends(camera)) -> dict:
     try:
         p = SavedPrint.model_validate_json(data)
     except ValidationError:
         raise HTTPException(422, "Check the print settings.")
     im = await read_upload(file)
     pid = uuid4().hex
-    rec = {"id": pid, "created": datetime.now(timezone.utc).isoformat(), "analysis": analyze(im, load_settings().autocrop, p.pan_x, p.pan_y, box_aspect(p.rotation, p.portrait)).model_dump(), "print": p.model_dump()}
+    rec = {"id": pid, "created": datetime.now(timezone.utc).isoformat(), "analysis": analyze(im, load_settings().autocrop, p.pan_x, p.pan_y, box_aspect(p.rotation, p.portrait), cam).model_dump(), "print": p.model_dump()}
     save_jpeg(im, PRINTS / f"{pid}.jpg")
     write_json(PRINTS / f"{pid}.json", rec)
     return rec
