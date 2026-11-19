@@ -45,6 +45,7 @@ class BenchPrint(Print):
     time: float | None = Field(None, gt=0)
     height: float | None = Field(None, gt=0)
     aperture: float = Field(8, gt=0)
+    rotation: int = Field(0, ge=0, le=3)  # preview only: quarter turns counterclockwise
 
 
 class SavedPrint(BenchPrint):

@@ -9,6 +9,12 @@ const fmtTime = (t) => t >= 60 ? `${Math.floor(t / 60)}:${String(Math.round(t % 
 // Invert the negative for preview. CSS brightness scales sRGB values, so 2^(stops/2.2) ≈ that many stops of light.
 const lookFilter = (brightness, grade) => `invert(1) grayscale(1) brightness(${2 ** (brightness / 2.2)}) contrast(${2 ** ((grade - 2.5) * 0.35)})`;
 
+// Quarter turns counterclockwise; odd turns shrink so the photo still fits the 4:3 frame.
+const rotTransform = (r) => `rotate(${-90 * r}deg)` + (r % 2 ? ' scale(.75)' : '');
+function onRotate(form, btn) {
+  btn.onclick = () => { form.rotation.value = (+form.rotation.value + 1) % 4; form.dispatchEvent(new Event('input')); };
+}
+
 const exifLine = (a) => a.ev == null
   ? 'No exposure data in this photo, so density assumes identical phone settings.'
   : `f/${+a.aperture.toFixed(1)} · 1/${Math.round(1 / a.shutter)} s · ISO ${Math.round(a.iso)} · EV ${a.ev.toFixed(1)}`;
@@ -22,7 +28,7 @@ function fillSelects(form, apDefault) {
 
 function readPrint(form) {
   const v = (n) => form[n] && form[n].value !== '' ? +form[n].value : null;
-  return { time: v('time'), height: v('height'), aperture: v('aperture'), grade: v('grade'), brightness: Math.round(v('brightness') * 3) / 3 };
+  return { time: v('time'), height: v('height'), aperture: v('aperture'), grade: v('grade'), brightness: Math.round(v('brightness') * 3) / 3, rotation: v('rotation') ?? 0 };
 }
 
 async function api(path, opts = {}) {

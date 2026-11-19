@@ -13,6 +13,7 @@
   <form class="card" id="b">
     <h2>Benchmark print</h2>
     <label class="photo"><img alt="Benchmark negative, inverted" hidden><span>Tap to add a photo of the negative you printed</span><input type="file" accept="image/*"></label>
+    <button type="button" class="rot" hidden>Rotate ↺</button><input type="hidden" name="rotation" value="0">
     <p class="note meta"></p>
     <div class="grid">
       <label class="f">Time (s)<input name="time" type="number" min="0" step="0.1" inputmode="decimal"></label>
@@ -28,6 +29,7 @@
   <form class="card" id="n">
     <h2>New negative</h2>
     <label class="photo"><img alt="New negative, inverted" hidden><span>Tap to add a photo of the new negative (same phone and light)</span><input type="file" accept="image/*"></label>
+    <button type="button" class="rot" hidden>Rotate ↺</button><input type="hidden" name="rotation" value="0">
     <p class="note meta"></p>
     <div class="grid">
       <label class="f">Height (in)<input name="height" type="number" min="0" step="0.125" inputmode="decimal"></label>
@@ -51,17 +53,20 @@ const card = (id) => ({ form: $(id), img: $(id).querySelector('img'), analysis: 
 const B = card('b'), N = card('n');
 fillSelects(B.form, 8);
 fillSelects(N.form, null);
+for (const c of [B, N]) onRotate(c.form, c.form.querySelector('.rot'));
 
 function look(c) {
   const p = readPrint(c.form);
   c.form.querySelector('output').value = signed(p.brightness, ' stops');
   c.img.style.filter = lookFilter(p.brightness, p.grade);
+  c.img.style.transform = rotTransform(p.rotation);
 }
 
 function showPhoto(c, src, a) {
   c.analysis = a;
   c.img.src = src;
   c.img.hidden = false;
+  c.form.querySelector('.rot').hidden = false;
   c.form.querySelector('.photo span').hidden = true;
   c.form.querySelector('.meta').textContent = exifLine(a);
 }
@@ -111,6 +116,8 @@ $('bDelete').onclick = async () => {
   B.form.reset();
   B.analysis = null;
   B.img.hidden = true;
+  B.form.rotation.value = 0; // reset() leaves hidden inputs alone
+  B.form.querySelector('.rot').hidden = true;
   B.form.querySelector('.photo span').hidden = false;
   B.form.querySelector('.meta').textContent = '';
   N.form.height.placeholder = '';

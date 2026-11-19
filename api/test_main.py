@@ -40,8 +40,8 @@ r = c.post("/api/prints", files={"file": ("n.jpg", buf.getvalue(), "image/jpeg")
 assert r.status_code == 201, r.text
 pid = r.json()["id"]
 assert [p["id"] for p in c.get("/api/prints").json()] == [pid]
-r = c.put(f"/api/prints/{pid}", json={"time": 16, "height": 8, "aperture": 11, "notes": "warmer paper"})
-assert r.json()["print"]["notes"] == "warmer paper" and r.json()["print"]["aperture"] == 11
+r = c.put(f"/api/prints/{pid}", json={"time": 16, "height": 8, "aperture": 11, "rotation": 1, "notes": "warmer paper"})
+assert r.json()["print"]["rotation"] == 1 and r.json()["print"]["notes"] == "warmer paper" and r.json()["print"]["aperture"] == 11
 assert c.get(f"/api/prints/{pid}/image").headers["content-type"] == "image/jpeg"
 assert c.post("/api/prints", files={"file": ("n.jpg", b"x", "image/jpeg")}, data={"data": '{"time": -1}'}).status_code == 422
 assert c.get("/api/prints/..%2Fbenchmark/image").status_code in (404, 422)
