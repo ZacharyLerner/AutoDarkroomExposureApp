@@ -21,7 +21,7 @@ PRINTS = DATA / "prints"
 SETTINGS = DATA / "settings.json"
 PRINTS.mkdir(exist_ok=True)
 PrintId = Annotated[str, PathParam(pattern=r"^[0-9a-f]{32}$")]  # also blocks path traversal
-MAX_UPLOAD = 40_000_000
+MAX_UPLOAD = 150_000_000  # full-res phone photos (48 MP, ProRAW-sized) run well past 40 MB
 
 # sRGB 0-255 -> linear light
 LIN = [(v / 12.92) if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in (i / 255 for i in range(256))]
