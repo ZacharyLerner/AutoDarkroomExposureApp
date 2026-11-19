@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main>
+  <header class="top"><h1>Settings</h1><a href="/">← Exposure</a></header>
+  <form class="card" id="s">
+    <div class="grid">
+      <label class="f">Autocrop (%)<input name="autocrop" type="number" min="0" max="100" step="1" inputmode="numeric"></label>
+      <label class="f">Phone contrast (×)<input name="contrast" type="number" min="1" max="4" step="0.1" inputmode="decimal"></label>
+    </div>
+    <p class="note" id="status"></p>
+  </form>
+</main>
+<script src="common.js"></script>
+<script>
+const form = $('s'), say = (t) => { $('status').textContent = t; };
+form.onsubmit = (e) => e.preventDefault();
+api('/settings').then((s) => { form.autocrop.value = s.autocrop; form.contrast.value = s.contrast; }).catch((err) => say(err.message));
+
+let timer = 0;
+form.oninput = () => {
+  clearTimeout(timer);
+  if (!form.checkValidity() || form.autocrop.value === '' || form.contrast.value === '') return say('Autocrop 0–100, phone contrast 1–4.');
+  timer = setTimeout(async () => {
+    try { await api('/settings', { method: 'PUT', json: { autocrop: +form.autocrop.value, contrast: +form.contrast.value } }); say('Saved.'); }
+    catch (err) { say('Not saved: ' + err.message); }
+  }, 400);
+};
+</script>
+</body>
+</html>

@@ -18,6 +18,7 @@ DATA.mkdir(parents=True, exist_ok=True)
 RECORD = DATA / "benchmark.json"
 IMAGE = DATA / "benchmark.jpg"
 PRINTS = DATA / "prints"
+SETTINGS = DATA / "settings.json"
 PRINTS.mkdir(exist_ok=True)
 PrintId = Annotated[str, PathParam(pattern=r"^[0-9a-f]{32}$")]  # also blocks path traversal
 MAX_UPLOAD = 40_000_000
@@ -46,10 +47,18 @@ class BenchPrint(Print):
     height: float | None = Field(None, gt=0)
     aperture: float = Field(8, gt=0)
     rotation: int = Field(0, ge=0, le=3)  # preview only: quarter turns counterclockwise
+    pan_x: float = Field(0, ge=-1, le=1)  # crop window position: -1 = left/top edge, 1 = right/bottom
+    pan_y: float = Field(0, ge=-1, le=1)
+    portrait: bool = False  # 3:2 crop box turned upright (2:3)
 
 
 class SavedPrint(BenchPrint):
     notes: str = Field("", max_length=2000)
+
+
+class Settings(BaseModel):
+    autocrop: float = Field(10, ge=0, le=100)  # % of width/height trimmed, split evenly between opposite edges
+    contrast: float = Field(2.2, ge=1, le=4)  # preview only: undoes the phone's tonal compression of the negative
 
 
 class ExposureIn(BaseModel):
@@ -66,21 +75,37 @@ def open_image(raw: bytes) -> Image.Image:
         raise HTTPException(415, "That file couldn't be opened as an image.")
 
 
-def analyze(im: Image.Image) -> Analysis:
+def box_aspect(rotation: int, portrait: bool) -> float:
+    """The 3:2 crop box's width/height in the photo's own (unrotated) axes."""
+    a = 2 / 3 if portrait else 3 / 2
+    return 1 / a if rotation % 2 else a
+
+
+def density(im: Image.Image, crop: float, pan_x: float = 0, pan_y: float = 0, aspect: float | None = None) -> float:
+    """log2 of mean light through the negative inside the crop box (aspect None = the photo's own shape)."""
+    g = im.convert("L")
+    g.thumbnail((400, 400))
+    w, h = g.size
+    aspect = aspect or w / h
+    fw, fh = ((h * aspect) / w, 1.0) if w / h > aspect else (1.0, w / (aspect * h))  # largest box that fits
+    f = max(1 - crop / 100, 0.01)  # autocrop zooms in on the box
+    cw, ch = max(1, round(w * fw * f)), max(1, round(h * fh * f))
+    x0 = min(w - cw, max(0, round((w - cw) / 2 * (1 + pan_x))))  # stay inside: Pillow pads black
+    y0 = min(h - ch, max(0, round((h - ch) / 2 * (1 + pan_y))))
+    g = g.crop((x0, y0, x0 + cw, y0 + ch))
+    hist = g.histogram()
+    mean = sum(c * LIN[i] for i, c in enumerate(hist)) / max(sum(hist), 1)
+    return math.log2(max(mean, 1e-4))
+
+
+def analyze(im: Image.Image, crop: float, pan_x: float = 0, pan_y: float = 0, aspect: float | None = None) -> Analysis:
     ex = im.getexif().get_ifd(0x8769)  # Exif sub-IFD
     iso = ex.get(34855)
     if isinstance(iso, (tuple, list)):
         iso = iso[0] if iso else None
     n, t, iso = (float(x) if x else None for x in (ex.get(33437), ex.get(33434), iso))
     ev = math.log2(n * n / t) - math.log2(iso / 100) if n and t and iso else None
-
-    g = im.convert("L")
-    g.thumbnail((400, 400))
-    w, h = g.size
-    g = g.crop((int(w * 0.05), int(h * 0.05), math.ceil(w * 0.95), math.ceil(h * 0.95)))  # ignore film border
-    hist = g.histogram()
-    mean = sum(c * LIN[i] for i, c in enumerate(hist)) / max(sum(hist), 1)
-    return Analysis(aperture=n, shutter=t, iso=iso, ev=ev, log_mean=math.log2(max(mean, 1e-4)))
+    return Analysis(aperture=n, shutter=t, iso=iso, ev=ev, log_mean=density(im, crop, pan_x, pan_y, aspect))
 
 
 def filter_factor(grade: float) -> float:
@@ -98,6 +123,18 @@ def exposure(b: Analysis, bp: BenchPrint, n: Analysis, np: Print) -> dict:
         "aperture": 2 * math.log2(np.aperture / bp.aperture),
     }
     return {"seconds": bp.time * 2 ** sum(stops.values()), "stops": stops, "exif_matched": matched}
+
+
+def load_settings() -> Settings:
+    return Settings.model_validate_json(SETTINGS.read_text()) if SETTINGS.exists() else Settings()
+
+
+def remeasure(rec: dict, crop: float) -> None:
+    """Re-measure the stored benchmark after its crop or pan changes, so it matches new negatives."""
+    if rec["analysis"] and IMAGE.exists():
+        p = BenchPrint(**rec["print"])
+        with Image.open(IMAGE) as im:
+            rec["analysis"]["log_mean"] = density(im, crop, p.pan_x, p.pan_y, box_aspect(p.rotation, p.portrait))
 
 
 def load() -> dict:
@@ -133,8 +170,14 @@ app = FastAPI(title="Darkroom Exposure API")
 
 
 @app.post("/api/analyze")
-async def post_analyze(file: UploadFile) -> Analysis:
-    return analyze(await read_upload(file))
+async def post_analyze(
+    file: UploadFile,
+    pan_x: float = Form(0, ge=-1, le=1),
+    pan_y: float = Form(0, ge=-1, le=1),
+    rotation: int = Form(0, ge=0, le=3),
+    portrait: bool = Form(False),
+) -> Analysis:
+    return analyze(await read_upload(file), load_settings().autocrop, pan_x, pan_y, box_aspect(rotation, portrait))
 
 
 @app.get("/api/benchmark")
@@ -145,9 +188,10 @@ def get_benchmark() -> dict:
 @app.put("/api/benchmark/image")
 async def put_benchmark_image(file: UploadFile) -> Analysis:
     im = await read_upload(file)
-    a = analyze(im)
-    save_jpeg(im, IMAGE)
     rec = load()
+    p = BenchPrint(**rec["print"])
+    a = analyze(im, load_settings().autocrop, p.pan_x, p.pan_y, box_aspect(p.rotation, p.portrait))
+    save_jpeg(im, IMAGE)
     rec["analysis"] = a.model_dump()
     save(rec)
     return a
@@ -164,6 +208,7 @@ def get_benchmark_image():
 def put_benchmark_print(p: BenchPrint) -> dict:
     rec = load()
     rec["print"] = p.model_dump()
+    remeasure(rec, load_settings().autocrop)
     save(rec)
     return rec
 
@@ -205,7 +250,7 @@ async def create_print(file: UploadFile, data: str = Form()) -> dict:
         raise HTTPException(422, "Check the print settings.")
     im = await read_upload(file)
     pid = uuid4().hex
-    rec = {"id": pid, "created": datetime.now(timezone.utc).isoformat(), "analysis": analyze(im).model_dump(), "print": p.model_dump()}
+    rec = {"id": pid, "created": datetime.now(timezone.utc).isoformat(), "analysis": analyze(im, load_settings().autocrop, p.pan_x, p.pan_y, box_aspect(p.rotation, p.portrait)).model_dump(), "print": p.model_dump()}
     save_jpeg(im, PRINTS / f"{pid}.jpg")
     write_json(PRINTS / f"{pid}.json", rec)
     return rec
@@ -215,6 +260,8 @@ async def create_print(file: UploadFile, data: str = Form()) -> dict:
 def update_print(pid: PrintId, p: SavedPrint) -> dict:
     rec = load_print(pid)
     rec["print"] = p.model_dump()
+    with Image.open(PRINTS / f"{pid}.jpg") as im:  # keep density in step with the print's crop
+        rec["analysis"]["log_mean"] = density(im, load_settings().autocrop, p.pan_x, p.pan_y, box_aspect(p.rotation, p.portrait))
     write_json(PRINTS / f"{pid}.json", rec)
     return rec
 
@@ -230,3 +277,18 @@ def delete_print(pid: PrintId) -> None:
     load_print(pid)
     (PRINTS / f"{pid}.json").unlink()
     (PRINTS / f"{pid}.jpg").unlink(missing_ok=True)
+
+
+# ---------- Settings ----------
+@app.get("/api/settings")
+def get_settings() -> Settings:
+    return load_settings()
+
+
+@app.put("/api/settings")
+def put_settings(s: Settings) -> Settings:
+    write_json(SETTINGS, s.model_dump())
+    rec = load()
+    remeasure(rec, s.autocrop)
+    save(rec)
+    return s

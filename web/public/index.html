@@ -8,12 +8,12 @@
 </head>
 <body>
 <main>
-  <header class="top"><h1>Darkroom Exposure</h1><a href="/prints.html">Prints</a></header>
+  <header class="top"><h1>Darkroom Exposure</h1><nav><a href="/prints.html">Prints</a> · <a href="/settings.html">Settings</a></nav></header>
 
   <form class="card" id="b">
     <h2>Benchmark print</h2>
-    <label class="photo"><img alt="Benchmark negative, inverted" hidden><span>Tap to add a photo of the negative you printed</span><input type="file" accept="image/*"></label>
-    <button type="button" class="rot" hidden>Rotate ↺</button><input type="hidden" name="rotation" value="0">
+    <label class="photo"><canvas role="img" aria-label="Benchmark print preview" hidden></canvas><span>Tap to add a photo of the negative you printed</span><input type="file" accept="image/*"></label>
+    <div class="tools" hidden><button type="button" class="rot">Rotate ↺</button> <button type="button" class="box">Box 3:2</button></div><input type="hidden" name="rotation" value="0"><input type="hidden" name="portrait" value="0"><input type="hidden" name="pan_x" value="0"><input type="hidden" name="pan_y" value="0">
     <p class="note meta"></p>
     <div class="grid">
       <label class="f">Time (s)<input name="time" type="number" min="0" step="0.1" inputmode="decimal"></label>
@@ -28,8 +28,8 @@
 
   <form class="card" id="n">
     <h2>New negative</h2>
-    <label class="photo"><img alt="New negative, inverted" hidden><span>Tap to add a photo of the new negative (same phone and light)</span><input type="file" accept="image/*"></label>
-    <button type="button" class="rot" hidden>Rotate ↺</button><input type="hidden" name="rotation" value="0">
+    <label class="photo"><canvas role="img" aria-label="New print preview" hidden></canvas><span>Tap to add a photo of the new negative (same phone and light)</span><input type="file" accept="image/*"></label>
+    <div class="tools" hidden><button type="button" class="rot">Rotate ↺</button> <button type="button" class="box">Box 3:2</button></div><input type="hidden" name="rotation" value="0"><input type="hidden" name="portrait" value="0"><input type="hidden" name="pan_x" value="0"><input type="hidden" name="pan_y" value="0">
     <p class="note meta"></p>
     <div class="grid">
       <label class="f">Height (in)<input name="height" type="number" min="0" step="0.125" inputmode="decimal"></label>
@@ -49,26 +49,44 @@
 
 <script src="common.js"></script>
 <script>
-const card = (id) => ({ form: $(id), img: $(id).querySelector('img'), analysis: null, file: null });
+const card = (id) => ({ form: $(id), img: $(id).querySelector('canvas'), analysis: null, file: null, neg: null });
 const B = card('b'), N = card('n');
 fillSelects(B.form, 8);
 fillSelects(N.form, null);
-for (const c of [B, N]) { onRotate(c.form, c.form.querySelector('.rot')); c.img.onload = () => look(c); }
+for (const c of [B, N]) { onRotate(c.form, c.form.querySelector('.rot')); onBox(c.form, c.form.querySelector('.box')); }
+enablePan(B.img, B.form, () => look(B), () => B.form.dispatchEvent(new Event('input'))); // saving re-measures on the server
+enablePan(N.img, N.form, () => look(N), () => measureN());
+
+// The new negative lives only in this page, so re-send it to measure the moved crop window.
+async function measureN() {
+  if (!N.file) return;
+  const fd = new FormData();
+  fd.append('file', N.file);
+  fd.append('pan_x', N.form.pan_x.value);
+  fd.append('pan_y', N.form.pan_y.value);
+  fd.append('rotation', N.form.rotation.value);
+  fd.append('portrait', N.form.portrait.value === '1');
+  try { N.analysis = await api('/analyze', { method: 'POST', body: fd }); look(N); compute(); }
+  catch (err) { N.form.querySelector('.meta').textContent = err.message; }
+}
 
 function look(c) {
   const p = readPrint(c.form);
   c.form.querySelector('output').value = signed(p.brightness, ' stops');
-  c.img.style.filter = lookFilter(p.brightness, p.grade);
-  placeRotated(c.img, p.rotation);
+  c.form.querySelector('.box').textContent = boxLabel(p);
+  if (c.neg && c.analysis) renderPrint(c.img, c.neg, c.analysis.log_mean, p.brightness, p.grade); // first: sizes the canvas
+  placeRotated(c.img, p.rotation, p.pan_x, p.pan_y, p.portrait);
 }
 
-function showPhoto(c, src, a) {
+async function showPhoto(c, src, a) {
   c.analysis = a;
-  c.img.src = src;
+  const meta = c.form.querySelector('.meta');
+  meta.textContent = exifLine(a);
+  try { c.neg = await loadNegative(src); } catch (err) { meta.textContent = err.message; return; }
   c.img.hidden = false;
-  c.form.querySelector('.rot').hidden = false;
+  c.form.querySelector('.tools').hidden = false;
   c.form.querySelector('.photo span').hidden = true;
-  c.form.querySelector('.meta').textContent = exifLine(a);
+  look(c);
 }
 
 function upload(c, path, method) {
@@ -78,6 +96,10 @@ function upload(c, path, method) {
     if (!file) return;
     const fd = new FormData();
     fd.append('file', file);
+    fd.append('pan_x', c.form.pan_x.value);
+    fd.append('pan_y', c.form.pan_y.value);
+    fd.append('rotation', c.form.rotation.value);
+    fd.append('portrait', c.form.portrait.value === '1');
     const meta = c.form.querySelector('.meta');
     meta.textContent = 'Reading photo…';
     try {
@@ -104,11 +126,16 @@ B.form.oninput = (e) => {
   saveTimer = setTimeout(async () => {
     const p = readPrint(B.form);
     p.aperture ??= 8;
-    try { await api('/benchmark/print', { method: 'PUT', json: p }); saved(); compute(); }
+    try { B.analysis = (await api('/benchmark/print', { method: 'PUT', json: p })).analysis; look(B); saved(); compute(); } // pan re-measures
     catch (err) { bStatus('Not saved: ' + err.message); }
   }, 400);
 };
-N.form.oninput = (e) => { if (e.target.type !== 'file') { look(N); compute(); } };
+N.form.oninput = (e) => {
+  if (e.target.type === 'file') return;
+  look(N);
+  if (e.target === N.form) measureN(); // rotate / box change moves what's measured
+  else compute();
+};
 
 $('bDelete').onclick = async () => {
   if (!confirm('Delete the saved benchmark?')) return;
@@ -116,9 +143,10 @@ $('bDelete').onclick = async () => {
   B.form.reset();
   B.analysis = null;
   B.img.hidden = true;
+  B.neg = null;
   B.img.parentElement.style.aspectRatio = '';
-  B.form.rotation.value = 0; // reset() leaves hidden inputs alone
-  B.form.querySelector('.rot').hidden = true;
+  B.form.rotation.value = B.form.pan_x.value = B.form.pan_y.value = B.form.portrait.value = 0; // reset() leaves hidden inputs alone
+  B.form.querySelector('.tools').hidden = true;
   B.form.querySelector('.photo span').hidden = false;
   B.form.querySelector('.meta').textContent = '';
   N.form.height.placeholder = '';
@@ -176,7 +204,7 @@ api('/benchmark').then((rec) => {
   for (const [k, v] of Object.entries(rec.print)) if (B.form[k] && v != null) B.form[k].value = v;
   N.form.height.placeholder = B.form.height.value;
   if (rec.analysis) { showPhoto(B, '/api/benchmark/image?' + Date.now(), rec.analysis); bStatus('Saved on the server.'); $('bDelete').hidden = false; }
-}).catch((err) => bStatus(err.message)).finally(() => { look(B); look(N); compute(); });
+}).catch((err) => bStatus(err.message)).finally(() => { look(B); look(N); compute(); settingsReady.then(() => { look(B); look(N); }); });
 </script>
 </body>
 </html>

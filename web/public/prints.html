@@ -18,9 +18,9 @@
     <h2></h2>
     <div class="pair">
       <figure><div class="frame"><img class="neg" alt="Negative"></div><figcaption>Negative</figcaption></figure>
-      <figure><div class="frame"><img class="adj" alt="Negative with adjustments"></div><figcaption>With adjustments</figcaption></figure>
+      <figure><div class="frame"><canvas class="adj" role="img" aria-label="Print preview"></canvas></div><figcaption>Print preview</figcaption></figure>
     </div>
-    <button type="button" class="rot">Rotate ↺</button><input type="hidden" name="rotation" value="0">
+    <button type="button" class="rot">Rotate ↺</button> <button type="button" class="box">Box 3:2</button><input type="hidden" name="rotation" value="0"><input type="hidden" name="portrait" value="0"><input type="hidden" name="pan_x" value="0"><input type="hidden" name="pan_y" value="0">
     <p class="note meta"></p>
     <div class="grid">
       <label class="f">Time (s)<input name="time" type="number" min="0" step="0.1" inputmode="decimal"></label>
@@ -42,18 +42,23 @@ function render(rec) {
   const q = (s) => form.querySelector(s);
   fillSelects(form, null);
   onRotate(form, q('.rot'));
-  q('.neg').onload = q('.adj').onload = () => look();
+  onBox(form, q('.box'));
+  let neg = null;
+  q('.neg').onload = () => look();
+  for (const img of [q('.neg'), q('.adj')]) enablePan(img, form, () => look(), () => form.dispatchEvent(new Event('input')));
   q('h2').textContent = new Date(rec.created).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-  q('.neg').src = q('.adj').src = `/api/prints/${rec.id}/image`;
+  q('.neg').src = `/api/prints/${rec.id}/image`;
+  loadNegative(q('.neg').src).then((n) => { neg = n; look(); }).catch((err) => { q('.saved').textContent = err.message; });
   q('.meta').textContent = exifLine(rec.analysis);
   for (const [k, v] of Object.entries(rec.print)) if (form[k] && v != null) form[k].value = v;
 
   const look = () => {
     const p = readPrint(form);
     q('output').value = signed(p.brightness, ' stops');
-    q('.adj').style.filter = lookFilter(p.brightness, p.grade);
-    placeRotated(q('.neg'), p.rotation);
-    placeRotated(q('.adj'), p.rotation);
+    q('.box').textContent = boxLabel(p);
+    if (neg) renderPrint(q('.adj'), neg, rec.analysis.log_mean, p.brightness, p.grade); // first: sizes the canvas
+    placeRotated(q('.neg'), p.rotation, p.pan_x, p.pan_y, p.portrait);
+    placeRotated(q('.adj'), p.rotation, p.pan_x, p.pan_y, p.portrait);
   };
   look();
 
@@ -63,7 +68,8 @@ function render(rec) {
     clearTimeout(timer);
     timer = setTimeout(async () => {
       try {
-        await api(`/prints/${rec.id}`, { method: 'PUT', json: { ...readPrint(form), notes: form.notes.value } });
+        rec.analysis = (await api(`/prints/${rec.id}`, { method: 'PUT', json: { ...readPrint(form), notes: form.notes.value } })).analysis;
+        look(); // pan re-measures density on the server
         q('.saved').textContent = 'Saved.';
       } catch (err) { q('.saved').textContent = 'Not saved: ' + err.message; }
     }, 400);
@@ -76,7 +82,7 @@ function render(rec) {
   return form;
 }
 
-api('/prints').then((recs) => {
+settingsReady.then(() => api('/prints')).then((recs) => {
   $('status').textContent = recs.length ? '' : 'No prints yet. Use “Save to prints” under a calculated time.';
   $('list').replaceChildren(...recs.map(render));
 }).catch((err) => { $('status').textContent = err.message; });
