@@ -17,8 +17,8 @@
   <form class="card">
     <h2></h2>
     <div class="pair">
-      <figure><img class="neg" alt="Negative"><figcaption>Negative</figcaption></figure>
-      <figure><img class="adj" alt="Negative with adjustments"><figcaption>With adjustments</figcaption></figure>
+      <figure><div class="frame"><img class="neg" alt="Negative"></div><figcaption>Negative</figcaption></figure>
+      <figure><div class="frame"><img class="adj" alt="Negative with adjustments"></div><figcaption>With adjustments</figcaption></figure>
     </div>
     <button type="button" class="rot">Rotate ↺</button><input type="hidden" name="rotation" value="0">
     <p class="note meta"></p>
@@ -42,6 +42,7 @@ function render(rec) {
   const q = (s) => form.querySelector(s);
   fillSelects(form, null);
   onRotate(form, q('.rot'));
+  q('.neg').onload = q('.adj').onload = () => look();
   q('h2').textContent = new Date(rec.created).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
   q('.neg').src = q('.adj').src = `/api/prints/${rec.id}/image`;
   q('.meta').textContent = exifLine(rec.analysis);
@@ -51,7 +52,8 @@ function render(rec) {
     const p = readPrint(form);
     q('output').value = signed(p.brightness, ' stops');
     q('.adj').style.filter = lookFilter(p.brightness, p.grade);
-    q('.neg').style.transform = q('.adj').style.transform = rotTransform(p.rotation);
+    placeRotated(q('.neg'), p.rotation);
+    placeRotated(q('.adj'), p.rotation);
   };
   look();
 

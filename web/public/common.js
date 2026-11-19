@@ -9,8 +9,15 @@ const fmtTime = (t) => t >= 60 ? `${Math.floor(t / 60)}:${String(Math.round(t % 
 // Invert the negative for preview. CSS brightness scales sRGB values, so 2^(stops/2.2) ≈ that many stops of light.
 const lookFilter = (brightness, grade) => `invert(1) grayscale(1) brightness(${2 ** (brightness / 2.2)}) contrast(${2 ** ((grade - 2.5) * 0.35)})`;
 
-// Quarter turns counterclockwise; odd turns shrink so the photo still fits the 4:3 frame.
-const rotTransform = (r) => `rotate(${-90 * r}deg)` + (r % 2 ? ' scale(.75)' : '');
+// Rotate a photo r quarter turns counterclockwise. The frame (img's parent) takes the rotated
+// aspect ratio and the img is sized pre-rotation, so the photo fills the frame with no black bars.
+function placeRotated(img, r) {
+  const w = img.naturalWidth || 4, h = img.naturalHeight || 3, odd = r % 2, turn = `rotate(${-90 * r}deg)`;
+  img.parentElement.style.aspectRatio = odd ? `${h} / ${w}` : `${w} / ${h}`;
+  Object.assign(img.style, odd
+    ? { position: 'absolute', left: '50%', top: '50%', width: `${(w / h) * 100}%`, height: `${(h / w) * 100}%`, transform: `translate(-50%, -50%) ${turn}` }
+    : { position: '', left: '', top: '', width: '', height: '', transform: turn });
+}
 function onRotate(form, btn) {
   btn.onclick = () => { form.rotation.value = (+form.rotation.value + 1) % 4; form.dispatchEvent(new Event('input')); };
 }

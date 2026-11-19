@@ -53,13 +53,13 @@ const card = (id) => ({ form: $(id), img: $(id).querySelector('img'), analysis: 
 const B = card('b'), N = card('n');
 fillSelects(B.form, 8);
 fillSelects(N.form, null);
-for (const c of [B, N]) onRotate(c.form, c.form.querySelector('.rot'));
+for (const c of [B, N]) { onRotate(c.form, c.form.querySelector('.rot')); c.img.onload = () => look(c); }
 
 function look(c) {
   const p = readPrint(c.form);
   c.form.querySelector('output').value = signed(p.brightness, ' stops');
   c.img.style.filter = lookFilter(p.brightness, p.grade);
-  c.img.style.transform = rotTransform(p.rotation);
+  placeRotated(c.img, p.rotation);
 }
 
 function showPhoto(c, src, a) {
@@ -116,6 +116,7 @@ $('bDelete').onclick = async () => {
   B.form.reset();
   B.analysis = null;
   B.img.hidden = true;
+  B.img.parentElement.style.aspectRatio = '';
   B.form.rotation.value = 0; // reset() leaves hidden inputs alone
   B.form.querySelector('.rot').hidden = true;
   B.form.querySelector('.photo span').hidden = false;
