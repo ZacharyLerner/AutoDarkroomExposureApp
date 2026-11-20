@@ -2,3 +2,5 @@ fastapi>=0.110
 uvicorn>=0.29
 pillow>=10
 python-multipart>=0.0.9
+rawpy>=0.21
+numpy>=1.26

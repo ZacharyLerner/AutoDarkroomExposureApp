@@ -10,6 +10,8 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, Form, HTTPException, UploadFile
 from fastapi import Path as PathParam
 from fastapi.responses import FileResponse
+import numpy as np
+import rawpy
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field, ValidationError
 
@@ -26,6 +28,9 @@ MAX_UPLOAD = 150_000_000  # originals go up whole: Safari applies the HDR gain m
 
 # sRGB 0-255 -> linear light
 LIN = [(v / 12.92) if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in (i / 255 for i in range(256))]
+# 16-bit linear -> 8-bit sRGB, the inverse of LIN, so RAW photos feed the same pipeline as JPEGs
+_l = np.arange(65536) / 65535
+SRGB16 = (255 * np.where(_l <= 0.0031308, _l * 12.92, 1.055 * _l ** (1 / 2.4) - 0.055) + 0.5).astype(np.uint8)
 
 
 class Analysis(BaseModel):
@@ -67,7 +72,28 @@ class ExposureIn(BaseModel):
     print: Print
 
 
+def open_raw(raw: bytes) -> Image.Image | None:
+    """Camera RAW (DNG): linear sensor data, free of the phone's HDR and tone mapping. None if not RAW."""
+    if raw[:4] not in (b"II*\0", b"MM\0*"):  # DNGs are TIFF files
+        return None
+    try:
+        with rawpy.imread(BytesIO(raw)) as r:  # half_size: 48 MP would need >1 GB to decode at full size
+            rgb = r.postprocess(gamma=(1, 1), no_auto_bright=True, output_bps=16, use_camera_wb=True, half_size=True)
+    except rawpy.LibRawError:
+        return None  # a plain TIFF: let Pillow have it
+    im = Image.fromarray(SRGB16[rgb])  # rawpy already turned it upright
+    try:
+        ex = Image.open(BytesIO(raw)).getexif()  # phone settings live in the DNG's TIFF tags
+        ex.pop(0x0112, None)  # orientation already applied
+        im.info["exif"] = ex.tobytes()
+    except (UnidentifiedImageError, OSError):
+        pass
+    return im
+
+
 def open_image(raw: bytes) -> Image.Image:
+    if (im := open_raw(raw)) is not None:
+        return im
     try:
         im = Image.open(BytesIO(raw))
         im.load()

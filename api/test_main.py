@@ -122,3 +122,14 @@ r = c.post("/api/analyze", files={"file": ("s.jpg", buf4.getvalue(), "image/jpeg
 assert top < r["log_mean"] - 3, (top, r)
 assert Image.open(BytesIO(c.get("/api/negative/image").content)).size == (40, 60)
 print("upright ok")
+
+# RAW: the linear->sRGB table inverts LIN; plain TIFFs and JPEGs skip the RAW decoder.
+from main import LIN, SRGB16, open_image, open_raw  # noqa: E402
+
+for x in (0.01, 0.18, 0.5, 0.9):
+    assert abs(LIN[SRGB16[round(x * 65535)]] / x - 1) < 0.03, x
+tif = BytesIO()
+Image.new("RGB", (8, 8), (90, 90, 90)).save(tif, "TIFF")
+assert open_raw(tif.getvalue()) is None and open_image(tif.getvalue()).size == (8, 8)
+assert open_raw(buf3.getvalue()) is None
+print("raw ok")
